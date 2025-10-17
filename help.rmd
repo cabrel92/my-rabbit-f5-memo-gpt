@@ -1,0 +1,90 @@
+
+
+ # Erlang SSL path
+ ERL_SSL_PATH="/usr/lib64/erlang/lib/ssl-9.4/ebin"
+
+ # Server node Erlang VM args (TLS inter-node)
+ RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS="-pa $ERL_SSL_PATH \
+  -proto_dist inet_tls \
+  -ssl_dist_opt server_certfile /etc/rabbitmq/server.crt \
+  -ssl_dist_opt keyfile /etc/rabbitmq/server.key \
+  -ssl_dist_opt cacertfile /etc/rabbitmq/ca.crt \
+  -ssl_dist_opt verify verify_peer \
+  -ssl_dist_opt fail_if_no_peer_cert true \
+  -ssl_dist_opt server_secure_renegotiate true \
+  -ssl_dist_opt client_secure_renegotiate true \
+  -kernel inet_dist_listen_min 35672 \
+  -kernel inet_dist_listen_max 35680"
+
+ # CLI Erlang VM args (TLS for rabbitmqctl)
+ RABBITMQ_CTL_ERL_ARGS="-pa $ERL_SSL_PATH \
+  -proto_dist inet_tls \
+  -ssl_dist_opt server_certfile /etc/rabbitmq/server.crt \
+  -ssl_dist_opt keyfile /etc/rabbitmq/server.key \
+  -ssl_dist_opt cacertfile /etc/rabbitmq/ca.crt \
+  -ssl_dist_opt verify verify_peer \
+  -ssl_dist_opt fail_if_no_peer_cert true \
+  -ssl_dist_opt server_secure_renegotiate true \
+  -ssl_dist_opt client_secure_renegotiate true"
+
+ # Erlang cookie (must be identical across all nodes)
+ RABBITMQ_ERLANG_COOKIE="YOUR_SECRET_COOKIE_HERE"
+
+ # Optional overrides
+ # Uncomment and tune if you want fixed distribution ports for firewall/NAT
+# DISTRIBUTION_PORT_RANGE_MIN=35672
+# DISTRIBUTION_PORT_RANGE_MAX=35680
+
+##########################################################
+# End of rabbitmq-env.conf
+##########################################################
+```
+
+---
+
+### ✅ Instructions
+
+1. **Replace placeholders**:
+
+* `/etc/rabbitmq/server.crt`, `/etc/rabbitmq/server.key`, `/etc/rabbitmq/ca.crt` → paths to your TLS certificates
+* `YOUR_SECRET_COOKIE_HERE` → Erlang cookie, same on all nodes
+
+2. **Restart RabbitMQ service on each node**:
+
+```bash
+sudo systemctl daemon-reexec
+sudo systemctl restart rabbitmq-server
+```
+
+3. **Reset nodes if Mnesia was deleted**:
+
+```bash
+rabbitmqctl stop_app
+rabbitmqctl reset
+rabbitmqctl start_app
+```
+
+4. **Form the cluster** (on secondary nodes):
+
+```bash
+rabbitmqctl stop_app
+rabbitmqctl reset
+rabbitmqctl join_cluster rabbit@<master-node>
+rabbitmqctl start_app
+```
+
+5. **Create users, vhosts, permissions, queues, etc**:
+
+```bash
+rabbitmqctl add_user admin StrongPass123!
+rabbitmqctl set_permissions -p / admin ".*" ".*" ".*"
+```
+
+---
+
+The configuration ensures:
+
+* **TLS inter-node communication is enforced**
+* **CLI tools can connect over TLS**
+* **Distribution ports are fixed for firewall/NAT**
+* **Cluster can be safely rebuilt from scratch after Mnesia deletion**
