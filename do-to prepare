@@ -1,0 +1,614 @@
+# PROJET RABBITMQ CLUSTER SÉCURISÉ (TLS)
+## Liste des Tâches - Statut pour Validation Manager
+
+**Date :** 20 Octobre 2025  
+**Projet :** Mise en place Cluster RabbitMQ Haute Disponibilité avec TLS  
+**Responsable :** Équipe Infrastructure  
+**Statut Global :** 🟡 EN COURS (45% complété)
+
+---
+
+## 📊 Vue d'Ensemble Exécutive
+
+| Phase | Statut | Progression | Priorité | Risque |
+|-------|--------|-------------|----------|--------|
+| **1. Préparation Infrastructure** | ✅ Terminé | 100% | Haute | 🟢 Faible |
+| **2. PKI et Certificats TLS** | ✅ Terminé | 100% | Critique | 🟢 Faible |
+| **3. Installation RabbitMQ** | 🟡 En cours | 60% | Haute | 🟡 Moyen |
+| **4. Configuration TLS** | 🔴 À faire | 0% | Critique | 🔴 Élevé |
+| **5. Formation du Cluster** | 🔴 À faire | 0% | Haute | 🔴 Élevé |
+| **6. Tests & Validation** | 🔴 À faire | 0% | Critique | 🔴 Élevé |
+| **7. Monitoring & Backup** | ⚪ Planifié | 0% | Moyenne | 🟡 Moyen |
+| **8. Formation & Documentation** | 🟡 En cours | 40% | Haute | 🟢 Faible |
+| **9. Migration Applications** | ⚪ Planifié | 0% | Critique | 🟡 Moyen |
+
+**Légende :** ✅ Terminé | 🟡 En cours | 🔴 À faire | ⚪ Planifié
+
+---
+
+## ✅ PHASE 1 : PRÉPARATION INFRASTRUCTURE (100%)
+
+### Tâches Complétées
+
+#### 1.1 Serveurs ✅
+- [x] **3 serveurs virtuels provisionnés**
+  - Serveur 1 : rabbitmq-serveur1.entreprise.local (10.0.1.11)
+  - Serveur 2 : rabbitmq-serveur2.entreprise.local (10.0.1.12)
+  - Serveur 3 : rabbitmq-serveur3.entreprise.local (10.0.1.13)
+  - Configuration : 4 CPU, 16GB RAM, 500GB SSD chacun
+  - **Budget alloué :** 15,000€/an
+  - **Date réalisation :** 05/10/2025
+
+#### 1.2 Réseau ✅
+- [x] **VLAN privé configuré** (VLAN 100)
+- [x] **DNS configuré** (entrées A et PTR)
+- [x] **Latence réseau validée** (<2ms entre serveurs)
+- [x] **Bande passante testée** (10 Gbps disponible)
+- **Responsable :** Équipe Réseau
+- **Date réalisation :** 08/10/2025
+
+#### 1.3 Système d'Exploitation ✅
+- [x] **OS installé** : RHEL 8.9 sur les 3 serveurs
+- [x] **Mises à jour système appliquées**
+- [x] **Utilisateurs et accès SSH configurés**
+- [x] **NTP synchronisé** (tous les serveurs à la même heure)
+- **Date réalisation :** 10/10/2025
+
+#### 1.4 Pare-feu ✅
+- [x] **Règles firewall créées et validées par la Sécurité**
+  - Port 5671 (AMQP TLS) : Ouvert depuis VLAN applications
+  - Port 15671 (Management HTTPS) : Ouvert depuis VLAN admin
+  - Port 25672 (Cluster TLS) : Ouvert entre les 3 serveurs
+  - Port 4369 (Erlang EPMD) : Ouvert entre les 3 serveurs
+  - Ports 35672-35682 (CLI) : Ouvert localement
+- **Validation :** Équipe Sécurité (ticket #SEC-2024-1156)
+- **Date réalisation :** 12/10/2025
+
+---
+
+## ✅ PHASE 2 : PKI ET CERTIFICATS TLS (100%)
+
+### Tâches Complétées
+
+#### 2.1 Autorité de Certification (CA) ✅
+- [x] **CA Root créée**
+  - Algorithme : RSA 4096 bits
+  - Validité : 10 ans (expire 2035)
+  - Clé privée chiffrée AES-256
+- [x] **Clé CA sauvegardée en coffre-fort sécurisé**
+  - Localisation : Coffre physique salle serveurs + Backup cloud chiffré
+  - Accès : 2 personnes autorisées (RSSI + Responsable Infra)
+- **Date réalisation :** 14/10/2025
+- **Validation :** RSSI (signature électronique)
+
+#### 2.2 Certificats Serveurs ✅
+- [x] **3 certificats serveurs générés**
+  - serveur1-bundle.pem (expire 14/10/2027)
+  - serveur2-bundle.pem (expire 14/10/2027)
+  - serveur3-bundle.pem (expire 14/10/2027)
+  - SAN inclus (DNS + IP)
+  - Signature SHA-384
+- [x] **Certificats validés** (chaîne de certification vérifiée)
+- **Date réalisation :** 15/10/2025
+
+#### 2.3 Certificats Clients ✅
+- [x] **5 certificats clients créés**
+  - app-production-1.pem (expire 14/10/2026)
+  - app-production-2.pem (expire 14/10/2026)
+  - app-staging.pem (expire 14/10/2026)
+  - app-dev.pem (expire 14/10/2026)
+  - app-monitoring.pem (expire 14/10/2026)
+- [x] **Distribution aux équipes dev planifiée**
+- **Date réalisation :** 16/10/2025
+
+#### 2.4 Documentation PKI ✅
+- [x] **Procédure création certificats documentée**
+- [x] **Procédure renouvellement documentée**
+- [x] **Calendrier de rotation créé** (tous les 6 mois)
+- [x] **Scripts automatisation PKI développés**
+- **Date réalisation :** 17/10/2025
+
+---
+
+## 🟡 PHASE 3 : INSTALLATION RABBITMQ (60%)
+
+### Tâches Complétées
+
+#### 3.1 Installation Logicielle ✅
+- [x] **Erlang 26.2 installé** sur les 3 serveurs
+- [x] **RabbitMQ 3.13.1 installé** sur les 3 serveurs
+- [x] **Plugins activés** :
+  - rabbitmq_management
+  - rabbitmq_management_agent
+  - rabbitmq_prometheus
+- **Date réalisation :** 18/10/2025
+
+#### 3.2 Certificats Déployés ✅
+- [x] **Certificats copiés sur serveur1**
+- [x] **Certificats copiés sur serveur2**
+- [x] **Certificats copiés sur serveur3**
+- [x] **Permissions fichiers sécurisées** (chmod 600 pour clés privées)
+- **Date réalisation :** 19/10/2025
+
+### Tâches En Cours
+
+#### 3.3 Configuration de Base 🟡
+- [x] **Fichier rabbitmq.conf créé** (template prêt)
+- [ ] **Configuration appliquée sur serveur1** - 🔴 BLOQUÉ
+- [ ] **Configuration appliquée sur serveur2** - ⏳ EN ATTENTE
+- [ ] **Configuration appliquée sur serveur3** - ⏳ EN ATTENTE
+- **Progression :** 25%
+- **Responsable :** Jean Dupont
+- **Blocage :** Validation finale configuration TLS requise
+- **Date prévue :** 22/10/2025
+
+#### 3.4 Cookie Erlang 🟡
+- [x] **Cookie généré** (sécurisé 256 bits)
+- [x] **Cookie déployé sur serveur1**
+- [ ] **Cookie déployé sur serveur2** - ⏳ EN ATTENTE
+- [ ] **Cookie déployé sur serveur3** - ⏳ EN ATTENTE
+- [ ] **Permissions vérifiées** (chmod 400)
+- **Progression :** 40%
+- **Date prévue :** 22/10/2025
+
+---
+
+## 🔴 PHASE 4 : CONFIGURATION TLS (0%)
+
+### Tâches À Faire - PRIORITÉ CRITIQUE
+
+#### 4.1 TLS Connexions Clients 🔴
+- [ ] **Configuration rabbitmq.conf - Section TLS**
+  - Listeners SSL
+  - Cipher suites
+  - Versions TLS (1.2/1.3 uniquement)
+  - mTLS activé (verify_peer)
+- [ ] **Test connexion TLS avec OpenSSL**
+- [ ] **Validation par équipe Sécurité**
+- **Priorité :** 🔴 CRITIQUE
+- **Responsable :** Jean Dupont
+- **Durée estimée :** 2 jours
+- **Dépendances :** Phase 3.3 terminée
+- **Date cible :** 24/10/2025
+
+#### 4.2 TLS Inter-Serveurs (Cluster) 🔴
+- [ ] **Fichier inter-serveurs-tls.config créé**
+  - Section server (accepter connexions)
+  - Section client (initier connexions)
+  - Cipher suites identiques
+- [ ] **Configuration Erlang (rabbitmq-env.conf)**
+  - Proto_dist inet_tls
+  - SSL_dist_optfile
+- [ ] **Variables CLI configurées (ERL_FLAGS)**
+- [ ] **Test connectivité inter-serveurs**
+- **Priorité :** 🔴 CRITIQUE
+- **Responsable :** Jean Dupont
+- **Durée estimée :** 3 jours
+- **Date cible :** 25/10/2025
+
+#### 4.3 Management HTTPS 🔴
+- [ ] **Port HTTP désactivé**
+- [ ] **Port HTTPS 15671 configuré**
+- [ ] **Certificats Management assignés**
+- [ ] **Test accès interface web**
+- **Priorité :** Haute
+- **Durée estimée :** 1 jour
+- **Date cible :** 26/10/2025
+
+---
+
+## 🔴 PHASE 5 : FORMATION DU CLUSTER (0%)
+
+### Tâches À Faire - PRIORITÉ CRITIQUE
+
+#### 5.1 Démarrage Premier Nœud 🔴
+- [ ] **Démarrage RabbitMQ sur serveur1**
+- [ ] **Vérification logs (TLS actif)**
+- [ ] **Test CLI avec TLS**
+- [ ] **Création utilisateur admin**
+- [ ] **Configuration permissions**
+- **Priorité :** 🔴 CRITIQUE
+- **Responsable :** Jean Dupont
+- **Durée estimée :** 1 jour
+- **Dépendances :** Phase 4 terminée
+- **Date cible :** 28/10/2025
+
+#### 5.2 Ajout Nœuds au Cluster 🔴
+- [ ] **Serveur2 rejoint le cluster**
+  - Stop app
+  - Join cluster
+  - Start app
+  - Vérification
+- [ ] **Serveur3 rejoint le cluster**
+  - Stop app
+  - Join cluster
+  - Start app
+  - Vérification
+- [ ] **Cluster status validé (3 nœuds actifs)**
+- **Priorité :** 🔴 CRITIQUE
+- **Durée estimée :** 1 jour
+- **Date cible :** 29/10/2025
+
+#### 5.3 Haute Disponibilité 🔴
+- [ ] **Politique HA configurée (ha-all)**
+- [ ] **Quorum queues activées**
+- [ ] **Réplication automatique testée**
+- [ ] **Test failover (arrêt 1 serveur)**
+- **Priorité :** 🔴 CRITIQUE
+- **Durée estimée :** 1 jour
+- **Date cible :** 30/10/2025
+
+---
+
+## 🔴 PHASE 6 : TESTS & VALIDATION (0%)
+
+### Tâches À Faire - PRIORITÉ CRITIQUE
+
+#### 6.1 Tests TLS 🔴
+- [ ] **Test connexion client TLS (OpenSSL)**
+- [ ] **Test connexion Python (script automatisé)**
+- [ ] **Test mTLS (authentification mutuelle)**
+- [ ] **Test rejet certificat invalide**
+- [ ] **Validation cipher suites (scan SSL)**
+- **Priorité :** 🔴 CRITIQUE
+- **Responsable :** Équipe Sécurité + Infra
+- **Durée estimée :** 2 jours
+- **Date cible :** 01/11/2025
+
+#### 6.2 Tests Fonctionnels 🔴
+- [ ] **Test publication messages**
+- [ ] **Test consommation messages**
+- [ ] **Test persistance (redémarrage serveur)**
+- [ ] **Test files d'attente (création/suppression)**
+- [ ] **Test exchanges et bindings**
+- **Priorité :** Haute
+- **Durée estimée :** 2 jours
+- **Date cible :** 02/11/2025
+
+#### 6.3 Tests Performance 🔴
+- [ ] **Load test (10,000 msg/sec)**
+- [ ] **Test montée en charge (20,000 connexions)**
+- [ ] **Mesure latence (<50ms)**
+- [ ] **Test saturation mémoire**
+- [ ] **Rapport performance généré**
+- **Priorité :** Moyenne
+- **Responsable :** Équipe Performance
+- **Durée estimée :** 3 jours
+- **Date cible :** 05/11/2025
+
+#### 6.4 Tests Haute Disponibilité 🔴
+- [ ] **Scénario 1 : Arrêt serveur1**
+- [ ] **Scénario 2 : Arrêt serveur2**
+- [ ] **Scénario 3 : Arrêt 2 serveurs (disaster)**
+- [ ] **Scénario 4 : Split-brain simulé**
+- [ ] **Temps de basculement mesuré (<5 sec)**
+- [ ] **Perte de messages évaluée (0 attendu)**
+- **Priorité :** 🔴 CRITIQUE
+- **Durée estimée :** 2 jours
+- **Date cible :** 06/11/2025
+
+#### 6.5 Audit Sécurité 🔴
+- [ ] **Scan vulnérabilités (Nessus/OpenVAS)**
+- [ ] **Vérification compliance (ISO 27001)**
+- [ ] **Audit logs (accès, connexions)**
+- [ ] **Pentest externe (optionnel)**
+- [ ] **Rapport sécurité validé par RSSI**
+- **Priorité :** 🔴 CRITIQUE
+- **Responsable :** Équipe Sécurité
+- **Durée estimée :** 5 jours
+- **Date cible :** 11/11/2025
+
+---
+
+## ⚪ PHASE 7 : MONITORING & BACKUP (0%)
+
+### Tâches Planifiées
+
+#### 7.1 Monitoring ⚪
+- [ ] **Prometheus configuré**
+- [ ] **Grafana dashboards créés**
+  - Dashboard Cluster Overview
+  - Dashboard TLS Connections
+  - Dashboard Performance
+- [ ] **Alertes configurées**
+  - Certificat expire < 30 jours
+  - Nœud down
+  - Mémoire > 80%
+  - Connexions non-TLS détectées
+- [ ] **Email/SMS notifications testés**
+- **Priorité :** Haute
+- **Responsable :** Équipe Monitoring
+- **Durée estimée :** 3 jours
+- **Date cible :** 14/11/2025
+
+#### 7.2 Backup ⚪
+- [ ] **Script backup automatisé créé**
+- [ ] **Stockage S3 configuré**
+- [ ] **Rétention 30 jours configurée**
+- [ ] **Chiffrement backup activé**
+- [ ] **Cron job configuré (quotidien 2h00)**
+- [ ] **Test restauration effectué**
+- **Priorité :** Haute
+- **Durée estimée :** 2 jours
+- **Date cible :** 16/11/2025
+
+#### 7.3 Disaster Recovery ⚪
+- [ ] **Procédure DR documentée**
+- [ ] **RTO/RPO définis (2h/1h)**
+- [ ] **Site secondaire identifié**
+- [ ] **Test DR complet (simulation)**
+- **Priorité :** Moyenne
+- **Durée estimée :** 5 jours
+- **Date cible :** 21/11/2025
+
+---
+
+## 🟡 PHASE 8 : FORMATION & DOCUMENTATION (40%)
+
+### Tâches Complétées
+
+#### 8.1 Documentation Technique ✅
+- [x] **Guide installation complet**
+- [x] **Guide configuration TLS**
+- [x] **Procédures opérationnelles (runbook)**
+- [x] **Scripts automatisation**
+- **Date réalisation :** 20/10/2025
+
+### Tâches En Cours
+
+#### 8.2 Documentation Utilisateur 🟡
+- [x] **Guide connexion Python**
+- [ ] **FAQ développeurs** - ⏳ EN COURS (70%)
+- [ ] **Exemples code (use cases)** - ⏳ EN COURS (50%)
+- [ ] **Troubleshooting guide**
+- **Responsable :** Marie Martin
+- **Date prévue :** 25/10/2025
+
+### Tâches À Faire
+
+#### 8.3 Formation Équipes 🔴
+- [ ] **Session formation Ops (4h)**
+  - Configuration TLS
+  - Gestion cluster
+  - Troubleshooting
+- [ ] **Session formation Dev (3h)**
+  - Connexion TLS Python
+  - Best practices
+  - Gestion erreurs
+- [ ] **Support documentation partagé (Confluence)**
+- **Priorité :** Haute
+- **Responsable :** Jean Dupont + Marie Martin
+- **Durée estimée :** 2 jours
+- **Date cible :** 22/11/2025
+
+---
+
+## ⚪ PHASE 9 : MIGRATION APPLICATIONS (0%)
+
+### Tâches Planifiées
+
+#### 9.1 Environnement de Test ⚪
+- [ ] **Cluster test déployé (2 nœuds)**
+- [ ] **Applications test migrées**
+- [ ] **Tests intégration**
+- [ ] **Validation fonctionnelle**
+- **Priorité :** Haute
+- **Durée estimée :** 1 semaine
+- **Date cible :** 25/11/2025
+
+#### 9.2 Migration Pilote ⚪
+- [ ] **5 applications non-critiques identifiées**
+- [ ] **Certificats clients distribués**
+- [ ] **Code applications mis à jour**
+- [ ] **Migration effectuée**
+- [ ] **Surveillance 48h post-migration**
+- **Priorité :** 🔴 CRITIQUE
+- **Durée estimée :** 2 semaines
+- **Date cible :** 09/12/2025
+
+#### 9.3 Migration Production ⚪
+- [ ] **Planning migration validé**
+- [ ] **Communication équipes**
+- [ ] **Migration par vagues (5 apps/jour)**
+- [ ] **Rollback plan documenté**
+- [ ] **Support renforcé (24/7)**
+- **Priorité :** 🔴 CRITIQUE
+- **Durée estimée :** 3 semaines
+- **Date cible :** 30/12/2025
+
+#### 9.4 Décommissionnement Ancien Système ⚪
+- [ ] **Validation 100% apps migrées**
+- [ ] **Ancien système arrêté**
+- [ ] **Données archivées**
+- [ ] **Serveurs libérés**
+- **Date cible :** 15/01/2026
+
+---
+
+## 🚨 POINTS D'ATTENTION & RISQUES
+
+### Risques Critiques Identifiés
+
+#### 1. Configuration TLS Complexe 🔴
+- **Risque :** Erreurs de configuration empêchant le cluster de démarrer
+- **Impact :** Retard projet 1-2 semaines
+- **Probabilité :** Moyenne (40%)
+- **Mitigation :** 
+  - ✅ Documentation détaillée créée
+  - ✅ Scripts de vérification développés
+  - 🔴 Session review avec expert externe à planifier
+- **Responsable :** Jean Dupont
+- **Statut :** ⚠️ À surveiller
+
+#### 2. Performance TLS 🟡
+- **Risque :** Latence additionnelle > 5ms (seuil acceptable)
+- **Impact :** Dégradation expérience utilisateur
+- **Probabilité :** Faible (20%)
+- **Mitigation :**
+  - Tests performance planifiés
+  - Hardware adapté (CPU récent avec AES-NI)
+  - Tuning possible si nécessaire
+- **Statut :** 🟢 Sous contrôle
+
+#### 3. Résistance au Changement Dev 🟡
+- **Risque :** Développeurs retardent migration (certificats complexes)
+- **Impact :** Retard migration 2-4 semaines
+- **Probabilité :** Moyenne (35%)
+- **Mitigation :**
+  - Formation prévue (22/11)
+  - Scripts simplification distribués
+  - Support dédié pendant migration
+- **Responsable :** Marie Martin
+- **Statut :** 🟡 À surveiller
+
+#### 4. Expiration Certificats 🟢
+- **Risque :** Certificats expirent et cassent production
+- **Impact :** 🔴 CATASTROPHIQUE (service down)
+- **Probabilité :** Faible (10%) si monitoring actif
+- **Mitigation :**
+  - ✅ Calendrier rotation créé (tous les 6 mois)
+  - 🔴 Alertes expiration à configurer (Phase 7)
+  - Procédure renouvellement documentée
+- **Statut :** 🟢 Sous contrôle
+
+---
+
+## 📅 PLANNING GLOBAL
+
+### Dates Clés
+
+| Milestone | Date Prévue | Statut | Criticité |
+|-----------|-------------|--------|-----------|
+| **Infrastructure prête** | 12/10/2025 | ✅ FAIT | - |
+| **PKI complète** | 17/10/2025 | ✅ FAIT | - |
+| **Configuration TLS terminée** | 26/10/2025 | 🔴 À FAIRE | 🔴 CRITIQUE |
+| **Cluster opérationnel** | 30/10/2025 | 🔴 À FAIRE | 🔴 CRITIQUE |
+| **Tests validation OK** | 11/11/2025 | 🔴 À FAIRE | 🔴 CRITIQUE |
+| **Monitoring actif** | 16/11/2025 | ⚪ PLANIFIÉ | Haute |
+| **Formation équipes** | 22/11/2025 | ⚪ PLANIFIÉ | Haute |
+| **Migration pilote** | 09/12/2025 | ⚪ PLANIFIÉ | 🔴 CRITIQUE |
+| **GO LIVE production** | 30/12/2025 | ⚪ PLANIFIÉ | 🔴 CRITIQUE |
+
+### Écart vs Planning Initial
+
+- **Planning initial GO LIVE :** 15/12/2025
+- **Planning révisé GO LIVE :** 30/12/2025
+- **Écart :** +15 jours ⚠️
+- **Raison :** Complexité TLS sous-estimée initialement
+
+---
+
+## 💰 BUDGET
+
+### Consommé à Date
+
+| Poste | Budget Prévu | Consommé | Reste | Statut |
+|-------|--------------|----------|-------|--------|
+| **Infrastructure (VM)** | 15,000€ | 15,000€ | 0€ | ✅ OK |
+| **Personnel (Ops)** | 20,000€ | 12,000€ | 8,000€ | 🟢 OK |
+| **Formation** | 5,000€ | 0€ | 5,000€ | 🟢 OK |
+| **Outils/Licences** | 3,000€ | 1,500€ | 1,500€ | 🟢 OK |
+| **Contingence (10%)** | 4,300€ | 0€ | 4,300€ | 🟢 OK |
+| **TOTAL** | **47,300€** | **28,500€** | **18,800€** | 🟢 **OK** |
+
+**Consommation :** 60% du budget (conforme au 45% avancement)
+
+---
+
+## 👥 RESSOURCES HUMAINES
+
+### Équipe Projet
+
+| Rôle | Nom | Allocation | Statut |
+|------|-----|------------|--------|
+| **Chef de Projet** | Pierre Legrand | 30% | ✅ Actif |
+| **Tech Lead Infra** | Jean Dupont | 80% | ✅ Actif |
+| **Ingénieur Ops** | Sophie Bernard | 60% | ✅ Actif |
+| **Expert Sécurité** | Marc Dubois | 20% | ✅ Disponible |
+| **Architecte** | Marie Martin | 40% | ✅ Actif |
+| **Responsable Formation** | Luc Moreau | 10% | ⚪ À venir |
+
+### Besoins Additionnels
+
+- [ ] **Expert TLS externe** (2 jours) - Pour review configuration critique
+  - **Coût estimé :** 3,000€
+  - **Besoin :** Avant 24/10/2025
+  - **Statut :** 🔴 À valider par manager
+
+---
+
+## 📋 DÉCISIONS REQUISES - VALIDATION MANAGER
+
+### 🔴 URGENT (< 3 jours)
+
+1. **Validation configuration TLS finale**
+   - ❓ Approuver cipher suites proposées (uniquement TLS 1.2+)
+   - ❓ Confirmer mTLS obligatoire pour tous les clients
+   - **Impact si non :** Blocage Phase 4 (configuration)
+   - **Recommandation :** ✅ Approuver (standard industrie)
+
+2. **Budget expert externe TLS**
+   - ❓ Approuver 3,000€ pour consultant 2 jours
+   - **Justification :** Réduire risque erreur configuration critique
+   - **Impact si non :** Risque retard 1-2 semaines
+   - **Recommandation :** ✅ Approuver (ROI positif)
+
+### 🟡 IMPORTANT (< 1 semaine)
+
+3. **Report GO LIVE (+15 jours)**
+   - ❓ Valider nouveau planning (30/12 au lieu de 15/12)
+   - **Raison :** Complexité TLS + tests approfondis nécessaires
+   - **Impact business :** Décalage migration applications Q4→Q1
+   - **Recommandation :** ✅ Approuver (garantit qualité)
+
+4. **Politique certificats clients**
+   - ❓ Durée validité : 12 mois ou 24 mois ?
+   - ❓ Renouvellement : Automatique ou manuel ?
+   - **Impact :** Charge opérationnelle équipes dev
+   - **Recommandation :** 12 mois + automatique
+
+### ⚪ À PLANIFIER (< 1 mois)
+
+5. **Communication vers Direction**
+   - ❓ Présentation exec (30min) au Comité IT
+   - **Objectif :** Valider ROI, risques, planning
+   - **Date proposée :** 10/11/2025
+   - **Responsable :** Pierre Legrand
+
+6. **Audit externe post-migration**
+   - ❓ Audit sécurité externe (optionnel, 10,000€)
+   - **Objectif :** Certification compliance
+   - **Date proposée :** Janvier 2026
+
+---
+
+## 📞 CONTACTS & ESCALADE
+
+### Équipe Projet
+- **Chef de Projet :** Pierre Legrand - pierre.legrand@entreprise.com - +33 6 XX XX XX XX
+- **Tech Lead :** Jean Dupont - jean.dupont@entreprise.com - +33 6 XX XX XX XX
+
+### Escalade
+- **Niveau 1 (Technique) :** Jean Dupont
+- **Niveau 2 (Manager) :** Pierre Legrand
+- **Niveau 3 (Direction) :** CTO - cto@entreprise.com
+
+### Astreinte (Post GO-LIVE)
+- **Support 24/7 :** support-rabbitmq@entreprise.com
+- **Téléphone :** +33 X XX XX XX XX
+
+---
+
+## ✅ ACTIONS IMMÉDIATES REQUISES
+
+### Pour le Manager
+
+1. ✅ **VALIDER** configuration TLS proposée (voir annexe technique)
+2. ✅ **APPROUVER** budget expert externe (3,000€)
+3. ✅ **ACCEPTER** report GO LIVE au 30/12/2025
+4. ✅ **DÉCIDER** politique renouvellement certificats clients
+5. ✅ **SIGNER** validation de cette liste de tâches
+
+### Pour l'Équipe Technique
+
+1. 🔴 **Terminer** Phase 3.3 (configuration
