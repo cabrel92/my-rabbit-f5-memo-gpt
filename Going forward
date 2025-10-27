@@ -1,0 +1,423 @@
+# Configuration Ansible via serveur de rebond Windows
+
+Je vais vous guider à travers cette architecture spécifique avec un serveur de rebond Windows vers un environnement Red Hat isolé.
+
+## 1. Installation d'Ansible sur Windows 11
+
+### Option A : WSL2 (Recommandé)
+```powershell
+# Installer WSL2
+wsl --install -d Ubuntu-22.04
+
+# Dans WSL
+sudo apt update
+sudo apt install ansible sshpass python3-pip -y
+```
+
+### Option B : Ansible natif Windows
+```powershell
+# Installer Python
+winget install Python.Python.3.11
+
+# Installer Ansible via pip
+pip install ansible pywinrm
+```
+
+## 2. Architecture de connexion
+
+```
+Windows 11 (Rebond) → SSH → RHEL Serveurs (Zone restreinte)
+     ↓
+  Ansible Controller
+     ↓
+  Paquets locaux (stockés sur Windows)
+```
+
+## 3. Configuration SSH depuis Windows
+
+### Générer les clés SSH
+```powershell
+# PowerShell
+ssh-keygen -t rsa -b 4096 -f $HOME\.ssh\ansible_key
+
+# Copier la clé vers les serveurs RHEL
+type $HOME\.ssh\ansible_key.pub | ssh user@rhel-server "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+```
+
+### Configuration SSH (~/.ssh/config)
+```
+Host rhel-dev-*
+    User ansible
+    IdentityFile ~/.ssh/ansible_key
+    StrictHostKeyChecking no
+    
+Host rhel-dev-1
+    HostName 192.168.1.10
+    
+Host rhel-dev-2
+    HostName 192.168.1.11
+    
+Host rhel-dev-3
+    HostName 192.168.1.12
+```
+
+## 4. Structure du projet Ansible
+
+```
+ansible-project/
+├── inventory/
+│   └── hosts.yml
+├── group_vars/
+│   └── rhel_servers.yml
+├── roles/
+│   ├── erlang/
+│   ├── rabbitmq/
+│   └── elk/
+├── packages/                    # Paquets stockés localement
+│   ├── erlang/
+│   ├── rabbitmq/
+│   └── elk/
+└── playbooks/
+    └── deploy_stack.yml
+```
+
+## 5. Inventaire (inventory/hosts.yml)
+
+```yaml
+all:
+  children:
+    rhel_servers:
+      hosts:
+        rhel-dev-1:
+          ansible_host: 192.168.1.10
+        rhel-dev-2:
+          ansible_host: 192.168.1.11
+        rhel-dev-3:
+          ansible_host: 192.168.1.12
+      vars:
+        ansible_user: ansible
+        ansible_ssh_private_key_file: ~/.ssh/ansible_key
+        ansible_python_interpreter: /usr/bin/python3
+```
+
+## 6. Téléchargement des paquets (sur machine avec Internet)
+
+### Script PowerShell pour télécharger les paquets
+```powershell
+# download_packages.ps1
+$packages = @{
+    "erlang" = "https://github.com/erlang/otp/releases/download/OTP-26.2.1/otp_src_26.2.1.tar.gz"
+    "rabbitmq" = "https://github.com/rabbitmq/rabbitmq-server/releases/download/v3.12.10/rabbitmq-server-generic-unix-3.12.10.tar.xz"
+    "elasticsearch" = "https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.11.3-linux-x86_64.tar.gz"
+    "logstash" = "https://artifacts.elastic.co/downloads/logstash/logstash-8.11.3-linux-x86_64.tar.gz"
+    "kibana" = "https://artifacts.elastic.co/downloads/kibana/kibana-8.11.3-linux-x86_64.tar.gz"
+}
+
+New-Item -Path ".\packages" -ItemType Directory -Force
+
+foreach ($pkg in $packages.GetEnumerator()) {
+    $destPath = ".\packages\$($pkg.Key)"
+    New-Item -Path $destPath -ItemType Directory -Force
+    
+    $filename = Split-Path $pkg.Value -Leaf
+    Invoke-WebRequest -Uri $pkg.Value -OutFile "$destPath\$filename"
+}
+```
+
+## 7. Playbook principal (playbooks/deploy_stack.yml)
+
+```yaml
+---
+- name: Deploy Erlang, RabbitMQ and ELK Stack
+  hosts: rhel_servers
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    base_install_dir: /opt
+    packages_source: "{{ playbook_dir }}/../packages"
+  
+  tasks:
+    - name: Install required system packages
+      yum:
+        name:
+          - gcc
+          - gcc-c++
+          - make
+          - ncurses-devel
+          - openssl-devel
+          - java-11-openjdk
+          - unzip
+          - tar
+        state: present
+
+    - name: Create installation directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ base_install_dir }}/erlang"
+        - "{{ base_install_dir }}/rabbitmq"
+        - "{{ base_install_dir }}/elasticsearch"
+        - "{{ base_install_dir }}/logstash"
+        - "{{ base_install_dir }}/kibana"
+
+  roles:
+    - erlang
+    - rabbitmq
+    - elk
+```
+
+## 8. Role Erlang (roles/erlang/tasks/main.yml)
+
+```yaml
+---
+- name: Copy Erlang package
+  copy:
+    src: "{{ packages_source }}/erlang/otp_src_26.2.1.tar.gz"
+    dest: "/tmp/otp_src_26.2.1.tar.gz"
+
+- name: Extract Erlang
+  unarchive:
+    src: "/tmp/otp_src_26.2.1.tar.gz"
+    dest: "/tmp/"
+    remote_src: yes
+
+- name: Configure Erlang
+  command: ./configure --prefix={{ base_install_dir }}/erlang
+  args:
+    chdir: /tmp/otp_src_26.2.1
+
+- name: Compile Erlang
+  command: make -j{{ ansible_processor_vcpus }}
+  args:
+    chdir: /tmp/otp_src_26.2.1
+
+- name: Install Erlang
+  command: make install
+  args:
+    chdir: /tmp/otp_src_26.2.1
+
+- name: Add Erlang to PATH
+  lineinfile:
+    path: /etc/profile.d/erlang.sh
+    line: 'export PATH={{ base_install_dir }}/erlang/bin:$PATH'
+    create: yes
+    mode: '0644'
+
+- name: Cleanup Erlang sources
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/otp_src_26.2.1
+    - /tmp/otp_src_26.2.1.tar.gz
+```
+
+## 9. Role RabbitMQ (roles/rabbitmq/tasks/main.yml)
+
+```yaml
+---
+- name: Copy RabbitMQ package
+  copy:
+    src: "{{ packages_source }}/rabbitmq/rabbitmq-server-generic-unix-3.12.10.tar.xz"
+    dest: "/tmp/rabbitmq.tar.xz"
+
+- name: Extract RabbitMQ
+  unarchive:
+    src: "/tmp/rabbitmq.tar.xz"
+    dest: "{{ base_install_dir }}/rabbitmq"
+    extra_opts: [--strip-components=1]
+    remote_src: yes
+
+- name: Create RabbitMQ user
+  user:
+    name: rabbitmq
+    system: yes
+    shell: /bin/bash
+    home: /var/lib/rabbitmq
+
+- name: Set RabbitMQ ownership
+  file:
+    path: "{{ base_install_dir }}/rabbitmq"
+    owner: rabbitmq
+    group: rabbitmq
+    recurse: yes
+
+- name: Configure RabbitMQ environment
+  template:
+    src: rabbitmq-env.conf.j2
+    dest: "{{ base_install_dir }}/rabbitmq/etc/rabbitmq/rabbitmq-env.conf"
+    owner: rabbitmq
+    group: rabbitmq
+
+- name: Create RabbitMQ systemd service
+  template:
+    src: rabbitmq-server.service.j2
+    dest: /etc/systemd/system/rabbitmq-server.service
+  notify: 
+    - reload systemd
+    - restart rabbitmq
+
+- name: Enable and start RabbitMQ
+  systemd:
+    name: rabbitmq-server
+    enabled: yes
+    state: started
+```
+
+### Template RabbitMQ Service (roles/rabbitmq/templates/rabbitmq-server.service.j2)
+
+```ini
+[Unit]
+Description=RabbitMQ broker
+After=network.target
+
+[Service]
+Type=notify
+User=rabbitmq
+Group=rabbitmq
+WorkingDirectory=/var/lib/rabbitmq
+ExecStart={{ base_install_dir }}/rabbitmq/sbin/rabbitmq-server
+ExecStop={{ base_install_dir }}/rabbitmq/sbin/rabbitmqctl shutdown
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## 10. Role ELK (roles/elk/tasks/main.yml)
+
+```yaml
+---
+- name: Deploy Elasticsearch
+  include_tasks: elasticsearch.yml
+
+- name: Deploy Logstash
+  include_tasks: logstash.yml
+
+- name: Deploy Kibana
+  include_tasks: kibana.yml
+```
+
+### Elasticsearch (roles/elk/tasks/elasticsearch.yml)
+
+```yaml
+---
+- name: Copy Elasticsearch package
+  copy:
+    src: "{{ packages_source }}/elk/elasticsearch-8.11.3-linux-x86_64.tar.gz"
+    dest: "/tmp/elasticsearch.tar.gz"
+
+- name: Extract Elasticsearch
+  unarchive:
+    src: "/tmp/elasticsearch.tar.gz"
+    dest: "{{ base_install_dir }}/elasticsearch"
+    extra_opts: [--strip-components=1]
+    remote_src: yes
+
+- name: Create Elasticsearch user
+  user:
+    name: elasticsearch
+    system: yes
+    shell: /bin/bash
+
+- name: Create Elasticsearch data directory
+  file:
+    path: /var/lib/elasticsearch
+    state: directory
+    owner: elasticsearch
+    group: elasticsearch
+    mode: '0755'
+
+- name: Configure Elasticsearch
+  template:
+    src: elasticsearch.yml.j2
+    dest: "{{ base_install_dir }}/elasticsearch/config/elasticsearch.yml"
+    owner: elasticsearch
+
+- name: Create Elasticsearch systemd service
+  template:
+    src: elasticsearch.service.j2
+    dest: /etc/systemd/system/elasticsearch.service
+  notify:
+    - reload systemd
+    - restart elasticsearch
+
+- name: Enable and start Elasticsearch
+  systemd:
+    name: elasticsearch
+    enabled: yes
+    state: started
+```
+
+### Configuration Elasticsearch (roles/elk/templates/elasticsearch.yml.j2)
+
+```yaml
+cluster.name: dev-cluster
+node.name: {{ ansible_hostname }}
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+network.host: 0.0.0.0
+http.port: 9200
+discovery.type: single-node
+xpack.security.enabled: false
+```
+
+## 11. Exécution du déploiement
+
+### Depuis WSL ou PowerShell
+```bash
+# Tester la connectivité
+ansible rhel_servers -i inventory/hosts.yml -m ping
+
+# Exécuter le playbook
+ansible-playbook -i inventory/hosts.yml playbooks/deploy_stack.yml
+
+# Avec verbosité pour debugging
+ansible-playbook -i inventory/hosts.yml playbooks/deploy_stack.yml -vvv
+```
+
+## 12. Vérification post-installation
+
+```yaml
+# playbooks/verify_installation.yml
+---
+- name: Verify installations
+  hosts: rhel_servers
+  tasks:
+    - name: Check Erlang version
+      command: "{{ base_install_dir }}/erlang/bin/erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell"
+      register: erlang_version
+      
+    - name: Check RabbitMQ status
+      systemd:
+        name: rabbitmq-server
+        state: started
+      check_mode: yes
+      register: rabbitmq_status
+      
+    - name: Check Elasticsearch
+      uri:
+        url: http://localhost:9200
+        method: GET
+      register: es_health
+      
+    - name: Display results
+      debug:
+        msg:
+          - "Erlang: {{ erlang_version.stdout }}"
+          - "RabbitMQ: {{ rabbitmq_status.status.ActiveState }}"
+          - "Elasticsearch: {{ es_health.json.version.number }}"
+```
+
+## Points clés pour votre contexte
+
+1. **Transfert de paquets** : Ansible copie automatiquement les fichiers depuis Windows vers RHEL via SSH
+2. **Pas d'Internet** : Tous les paquets sont pré-téléchargés et stockés localement
+3. **WSL2** : Offre la meilleure compatibilité Ansible sur Windows
+4. **Idempotence** : Les playbooks peuvent être rejoués sans problème
+5. **Variables centralisées** : Facile à adapter pour d'autres versions
+
+Besoin de précisions sur une partie spécifique ?
