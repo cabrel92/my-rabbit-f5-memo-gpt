@@ -1,0 +1,649 @@
+# Installation Minimaliste d'Ansible sur Windows 11 (Sans WSL)
+
+Je comprends parfaitement. Voici une installation **minimaliste et native** d'Ansible directement sur Windows 11, sans WSL.
+
+## 1. Installation Minimaliste - Étape par Étape
+
+### Étape 1 : Installer Python (Portable si nécessaire)
+
+**Option A : Installation standard (recommandée)**
+
+```powershell
+# Télécharger Python 3.11 (sur machine avec Internet)
+# URL: https://www.python.org/ftp/python/3.11.7/python-3.11.7-amd64.exe
+
+# Installer en mode silencieux
+.\python-3.11.7-amd64.exe /quiet InstallAllUsers=1 PrependPath=1 Include_test=0 Include_doc=0
+
+# Vérifier l'installation
+python --version
+pip --version
+```
+
+**Option B : Installation portable (sans admin)**
+
+```powershell
+# Télécharger Python embeddable
+# URL: https://www.python.org/ftp/python/3.11.7/python-3.11.7-embed-amd64.zip
+
+# Extraire dans C:\Python311
+Expand-Archive -Path python-3.11.7-embed-amd64.zip -DestinationPath C:\Python311
+
+# Télécharger get-pip.py
+# URL: https://bootstrap.pypa.io/get-pip.py
+
+# Installer pip
+C:\Python311\python.exe get-pip.py
+
+# Ajouter au PATH (temporaire pour la session)
+$env:Path += ";C:\Python311;C:\Python311\Scripts"
+```
+
+### Étape 2 : Télécharger Ansible et dépendances (sur machine avec Internet)
+
+```powershell
+# Créer un dossier pour les packages
+New-Item -Path "C:\ansible-offline" -ItemType Directory -Force
+cd C:\ansible-offline
+
+# Télécharger UNIQUEMENT les paquets nécessaires pour Ansible minimal
+pip download ansible-core==2.15.8
+pip download paramiko
+pip download jinja2
+pip download PyYAML
+pip download cryptography
+pip download cffi
+pip download pycparser
+
+# Créer une archive
+Compress-Archive -Path "C:\ansible-offline\*" -DestinationPath "C:\ansible-offline-packages.zip"
+```
+
+### Étape 3 : Transférer et installer sur Windows isolé
+
+```powershell
+# Sur le Windows isolé (sans Internet)
+# 1. Copier ansible-offline-packages.zip via USB/réseau interne
+
+# 2. Extraire
+Expand-Archive -Path ansible-offline-packages.zip -DestinationPath C:\ansible-offline
+
+# 3. Installer Ansible
+cd C:\ansible-offline
+pip install --no-index --find-links=. ansible-core
+
+# 4. Vérifier l'installation
+ansible --version
+```
+
+**Résultat attendu :**
+```
+ansible [core 2.15.8]
+  config file = None
+  configured module search path = ['C:\\Users\\...']
+  ansible python module location = C:\Users\...\site-packages\ansible
+  ansible collection location = C:\Users\...\.ansible\collections
+  executable location = C:\Python311\Scripts\ansible.exe
+  python version = 3.11.7
+```
+
+### Étape 4 : Configuration SSH Windows natif
+
+```powershell
+# Vérifier si OpenSSH Client est installé
+Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Client*'
+
+# Si non installé et pas d'accès au store Windows :
+# Télécharger OpenSSH depuis GitHub (sur machine avec Internet)
+# URL: https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.5.0.0p1-Beta/OpenSSH-Win64.zip
+
+# Sur Windows isolé :
+Expand-Archive -Path OpenSSH-Win64.zip -DestinationPath "C:\Program Files\OpenSSH"
+
+# Ajouter au PATH système
+[Environment]::SetEnvironmentVariable("Path", $env:Path + ";C:\Program Files\OpenSSH", "Machine")
+
+# Rafraîchir le PATH
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine")
+
+# Vérifier
+ssh -V
+```
+
+## 2. Structure Minimaliste du Projet
+
+```
+C:\ansible-rabbitmq\
+├── ansible.cfg                    # Configuration Ansible
+├── inventory.ini                  # Inventaire simple
+├── group_vars\
+│   └── all.yml                   # Variables globales
+├── deploy_erlang.yml             # Playbook Erlang
+├── deploy_rabbitmq.yml           # Playbook RabbitMQ  
+├── validate.yml                  # Playbook validation
+└── packages\                     # Paquets à déployer
+    ├── erlang\
+    │   ├── otp_src_27.1.2.tar.gz
+    │   └── erlang-deps.tar.gz
+    └── rabbitmq\
+        └── rabbitmq-server-generic-unix-4.1.0.tar.xz
+```
+
+## 3. Configuration Minimaliste
+
+### ansible.cfg
+
+```ini
+[defaults]
+inventory = inventory.ini
+host_key_checking = False
+retry_files_enabled = False
+gathering = smart
+fact_caching = memory
+interpreter_python = auto_silent
+
+# Optimisation pour environnement isolé
+forks = 3
+timeout = 30
+log_path = ansible.log
+
+[ssh_connection]
+ssh_args = -o ControlMaster=auto -o ControlPersist=60s -o StrictHostKeyChecking=no
+pipelining = True
+control_path = %(directory)s/%%h-%%r
+```
+
+### inventory.ini
+
+```ini
+[rhel_servers]
+rhel-dev-1 ansible_host=192.168.1.10
+rhel-dev-2 ansible_host=192.168.1.11
+rhel-dev-3 ansible_host=192.168.1.12
+
+[rhel_servers:vars]
+ansible_user=ansible
+ansible_ssh_private_key_file=~/.ssh/ansible_rsa
+ansible_python_interpreter=/usr/bin/python3
+ansible_become=yes
+ansible_become_method=sudo
+```
+
+### group_vars\all.yml
+
+```yaml
+---
+# Chemins de base
+base_install_dir: /opt
+packages_dir: "{{ playbook_dir }}/packages"
+temp_dir: /tmp/ansible-deploy
+
+# Erlang
+erlang_version: "27.1.2"
+erlang_tarball: "otp_src_{{ erlang_version }}.tar.gz"
+erlang_dir: "{{ base_install_dir }}/erlang-{{ erlang_version }}"
+
+# RabbitMQ
+rabbitmq_version: "4.1.0"
+rabbitmq_tarball: "rabbitmq-server-generic-unix-{{ rabbitmq_version }}.tar.xz"
+rabbitmq_dir: "{{ base_install_dir }}/rabbitmq"
+rabbitmq_home: "{{ rabbitmq_dir }}/rabbitmq_server-{{ rabbitmq_version }}"
+rabbitmq_user: rabbitmq
+rabbitmq_group: rabbitmq
+```
+
+## 4. Playbook Minimaliste pour Erlang
+
+### deploy_erlang.yml
+
+```yaml
+---
+- name: Deploy Erlang 27
+  hosts: rhel_servers
+  become: yes
+  
+  tasks:
+    - name: Create temp directory
+      file:
+        path: "{{ temp_dir }}"
+        state: directory
+    
+    - name: Copy Erlang dependencies
+      copy:
+        src: "{{ packages_dir }}/erlang/erlang-deps.tar.gz"
+        dest: "{{ temp_dir }}/"
+    
+    - name: Extract dependencies
+      unarchive:
+        src: "{{ temp_dir }}/erlang-deps.tar.gz"
+        dest: "{{ temp_dir }}"
+        remote_src: yes
+    
+    - name: Install dependencies
+      shell: yum localinstall -y {{ temp_dir }}/erlang-deps/*.rpm
+      args:
+        warn: false
+    
+    - name: Copy Erlang source
+      copy:
+        src: "{{ packages_dir }}/erlang/{{ erlang_tarball }}"
+        dest: "{{ temp_dir }}/"
+    
+    - name: Extract Erlang
+      unarchive:
+        src: "{{ temp_dir }}/{{ erlang_tarball }}"
+        dest: "{{ temp_dir }}"
+        remote_src: yes
+    
+    - name: Configure Erlang
+      shell: |
+        cd {{ temp_dir }}/otp_src_{{ erlang_version }}
+        ./configure --prefix={{ erlang_dir }} --without-javac
+      args:
+        creates: "{{ temp_dir }}/otp_src_{{ erlang_version }}/Makefile"
+    
+    - name: Compile Erlang
+      shell: |
+        cd {{ temp_dir }}/otp_src_{{ erlang_version }}
+        make -j{{ ansible_processor_vcpus }}
+      args:
+        creates: "{{ temp_dir }}/otp_src_{{ erlang_version }}/bin/erl"
+    
+    - name: Install Erlang
+      shell: |
+        cd {{ temp_dir }}/otp_src_{{ erlang_version }}
+        make install
+      args:
+        creates: "{{ erlang_dir }}/bin/erl"
+    
+    - name: Set Erlang PATH
+      copy:
+        content: 'export PATH={{ erlang_dir }}/bin:$PATH'
+        dest: /etc/profile.d/erlang.sh
+        mode: '0644'
+    
+    - name: Verify installation
+      shell: "{{ erlang_dir }}/bin/erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell"
+      register: erl_ver
+      changed_when: false
+    
+    - name: Show result
+      debug:
+        msg: "Erlang {{ erl_ver.stdout }} installed"
+    
+    - name: Cleanup
+      file:
+        path: "{{ temp_dir }}"
+        state: absent
+```
+
+## 5. Playbook Minimaliste pour RabbitMQ
+
+### deploy_rabbitmq.yml
+
+```yaml
+---
+- name: Deploy RabbitMQ 4.1
+  hosts: rhel_servers
+  become: yes
+  
+  tasks:
+    - name: Create RabbitMQ user
+      user:
+        name: "{{ rabbitmq_user }}"
+        system: yes
+        shell: /bin/bash
+        home: /var/lib/rabbitmq
+        createhome: yes
+    
+    - name: Create directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ rabbitmq_user }}"
+        group: "{{ rabbitmq_group }}"
+        mode: '0755'
+      loop:
+        - "{{ rabbitmq_dir }}"
+        - /var/lib/rabbitmq/mnesia
+        - /var/log/rabbitmq
+        - /etc/rabbitmq
+    
+    - name: Copy RabbitMQ package
+      copy:
+        src: "{{ packages_dir }}/rabbitmq/{{ rabbitmq_tarball }}"
+        dest: "{{ temp_dir }}/"
+    
+    - name: Extract RabbitMQ
+      unarchive:
+        src: "{{ temp_dir }}/{{ rabbitmq_tarball }}"
+        dest: "{{ rabbitmq_dir }}"
+        remote_src: yes
+        owner: "{{ rabbitmq_user }}"
+        group: "{{ rabbitmq_group }}"
+    
+    - name: Create RabbitMQ config
+      copy:
+        content: |
+          listeners.tcp.default = 5672
+          management.tcp.port = 15672
+          log.file.level = info
+          vm_memory_high_watermark.relative = 0.6
+        dest: "{{ rabbitmq_home }}/etc/rabbitmq/rabbitmq.conf"
+        owner: "{{ rabbitmq_user }}"
+    
+    - name: Create environment file
+      copy:
+        content: |
+          ERLANG_HOME={{ erlang_dir }}
+          PATH={{ erlang_dir }}/bin:$PATH
+          RABBITMQ_MNESIA_BASE=/var/lib/rabbitmq/mnesia
+          RABBITMQ_LOG_BASE=/var/log/rabbitmq
+        dest: "{{ rabbitmq_home }}/etc/rabbitmq/rabbitmq-env.conf"
+        owner: "{{ rabbitmq_user }}"
+    
+    - name: Create systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=RabbitMQ Server
+          After=network.target
+          
+          [Service]
+          Type=notify
+          User={{ rabbitmq_user }}
+          Group={{ rabbitmq_group }}
+          Environment="PATH={{ erlang_dir }}/bin:/usr/local/bin:/usr/bin:/bin"
+          Environment="ERLANG_HOME={{ erlang_dir }}"
+          WorkingDirectory={{ rabbitmq_home }}
+          ExecStart={{ rabbitmq_home }}/sbin/rabbitmq-server
+          ExecStop={{ rabbitmq_home }}/sbin/rabbitmqctl shutdown
+          Restart=on-failure
+          LimitNOFILE=65536
+          
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/rabbitmq-server.service
+    
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+    
+    - name: Start RabbitMQ
+      systemd:
+        name: rabbitmq-server
+        state: started
+        enabled: yes
+    
+    - name: Wait for RabbitMQ
+      wait_for:
+        port: 5672
+        delay: 10
+        timeout: 60
+    
+    - name: Enable management plugin
+      shell: |
+        export PATH={{ erlang_dir }}/bin:$PATH
+        {{ rabbitmq_home }}/sbin/rabbitmq-plugins enable rabbitmq_management
+      become_user: "{{ rabbitmq_user }}"
+    
+    - name: Restart RabbitMQ
+      systemd:
+        name: rabbitmq-server
+        state: restarted
+    
+    - name: Create admin user
+      shell: |
+        export PATH={{ erlang_dir }}/bin:$PATH
+        {{ rabbitmq_home }}/sbin/rabbitmqctl add_user admin AdminPass123 || true
+        {{ rabbitmq_home }}/sbin/rabbitmqctl set_user_tags admin administrator
+        {{ rabbitmq_home }}/sbin/rabbitmqctl set_permissions -p / admin ".*" ".*" ".*"
+      become_user: "{{ rabbitmq_user }}"
+    
+    - name: Get status
+      shell: |
+        export PATH={{ erlang_dir }}/bin:$PATH
+        {{ rabbitmq_home }}/sbin/rabbitmqctl status
+      become_user: "{{ rabbitmq_user }}"
+      register: rmq_status
+    
+    - name: Show status
+      debug:
+        msg: "{{ rmq_status.stdout_lines }}"
+```
+
+## 6. Playbook de Validation
+
+### validate.yml
+
+```yaml
+---
+- name: Validate Installation
+  hosts: rhel_servers
+  become: yes
+  
+  tasks:
+    - name: Check Erlang
+      shell: "{{ erlang_dir }}/bin/erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell"
+      register: erl_check
+      changed_when: false
+    
+    - name: Check RabbitMQ service
+      systemd:
+        name: rabbitmq-server
+      register: rmq_svc
+    
+    - name: Check RabbitMQ port
+      wait_for:
+        port: 5672
+        timeout: 5
+    
+    - name: Check management port
+      wait_for:
+        port: 15672
+        timeout: 5
+    
+    - name: Get RabbitMQ version
+      shell: |
+        export PATH={{ erlang_dir }}/bin:$PATH
+        {{ rabbitmq_home }}/sbin/rabbitmqctl version
+      become_user: "{{ rabbitmq_user }}"
+      register: rmq_ver
+      changed_when: false
+    
+    - name: Display results
+      debug:
+        msg:
+          - "Erlang: {{ erl_check.stdout }}"
+          - "RabbitMQ: {{ rmq_ver.stdout }}"
+          - "Service: {{ rmq_svc.status.ActiveState }}"
+          - "Management: http://{{ ansible_host }}:15672"
+          - "User: admin / Pass: AdminPass123"
+```
+
+## 7. Configuration SSH
+
+### Générer les clés
+
+```powershell
+# Dans PowerShell Windows
+
+# Créer le répertoire .ssh
+New-Item -Path "$env:USERPROFILE\.ssh" -ItemType Directory -Force
+
+# Générer la clé
+ssh-keygen -t rsa -b 4096 -f "$env:USERPROFILE\.ssh\ansible_rsa" -N '""'
+
+# Afficher la clé publique
+type "$env:USERPROFILE\.ssh\ansible_rsa.pub"
+```
+
+### Configurer SSH
+
+```powershell
+# Créer le fichier config
+New-Item -Path "$env:USERPROFILE\.ssh\config" -ItemType File -Force
+
+# Éditer avec notepad
+notepad "$env:USERPROFILE\.ssh\config"
+```
+
+Contenu du fichier config :
+
+```
+Host rhel-*
+    User ansible
+    IdentityFile ~/.ssh/ansible_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile nul
+
+Host rhel-dev-1
+    HostName 192.168.1.10
+
+Host rhel-dev-2
+    HostName 192.168.1.11
+
+Host rhel-dev-3
+    HostName 192.168.1.12
+```
+
+### Copier la clé vers les serveurs RHEL
+
+```powershell
+# Afficher la clé
+type "$env:USERPROFILE\.ssh\ansible_rsa.pub"
+
+# Se connecter à chaque serveur et exécuter :
+# (première connexion avec mot de passe)
+```
+
+Sur chaque serveur RHEL :
+
+```bash
+# En tant que root
+useradd -m -s /bin/bash ansible
+passwd ansible  # Définir un mot de passe temporaire
+
+# Basculer vers ansible
+su - ansible
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+# Coller la clé publique
+nano ~/.ssh/authorized_keys
+# Coller le contenu de ansible_rsa.pub
+chmod 600 ~/.ssh/authorized_keys
+
+# Retour en root
+exit
+
+# Configurer sudo
+echo "ansible ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ansible
+chmod 440 /etc/sudoers.d/ansible
+```
+
+## 8. Scripts d'exécution simplifiés
+
+### deploy.ps1
+
+```powershell
+# deploy.ps1 - Script de déploiement Windows natif
+
+param(
+    [ValidateSet('ping', 'erlang', 'rabbitmq', 'all', 'validate')]
+    [string]$Action = 'ping'
+)
+
+Set-Location "C:\ansible-rabbitmq"
+
+switch ($Action) {
+    'ping' {
+        Write-Host "`nTest de connectivité..." -ForegroundColor Cyan
+        ansible rhel_servers -m ping
+    }
+    'erlang' {
+        Write-Host "`nDéploiement Erlang 27..." -ForegroundColor Cyan
+        ansible-playbook deploy_erlang.yml -v
+    }
+    'rabbitmq' {
+        Write-Host "`nDéploiement RabbitMQ 4.1..." -ForegroundColor Cyan
+        ansible-playbook deploy_rabbitmq.yml -v
+    }
+    'all' {
+        Write-Host "`nDéploiement complet..." -ForegroundColor Cyan
+        ansible-playbook deploy_erlang.yml -v
+        if ($LASTEXITCODE -eq 0) {
+            ansible-playbook deploy_rabbitmq.yml -v
+        }
+    }
+    'validate' {
+        Write-Host "`nValidation..." -ForegroundColor Cyan
+        ansible-playbook validate.yml
+    }
+}
+```
+
+### Utilisation
+
+```powershell
+# Test de connectivité
+.\deploy.ps1 -Action ping
+
+# Déployer Erlang
+.\deploy.ps1 -Action erlang
+
+# Déployer RabbitMQ
+.\deploy.ps1 -Action rabbitmq
+
+# Déployer tout
+.\deploy.ps1 -Action all
+
+# Valider
+.\deploy.ps1 -Action validate
+```
+
+## 9. Commandes rapides
+
+```powershell
+# Naviguer vers le projet
+cd C:\ansible-rabbitmq
+
+# Tester la connectivité
+ansible rhel_servers -m ping
+
+# Voir les infos système
+ansible rhel_servers -m setup -a "filter=ansible_os_family"
+
+# Exécuter une commande
+ansible rhel_servers -a "hostname" -b
+
+# Déployer Erlang
+ansible-playbook deploy_erlang.yml
+
+# Déployer RabbitMQ
+ansible-playbook deploy_rabbitmq.yml
+
+# Valider
+ansible-playbook validate.yml
+
+# Logs
+ansible rhel_servers -a "tail -20 /var/log/rabbitmq/rabbit@`$(hostname).log" -b
+```
+
+---
+
+## ✅ Avantages de cette approche minimaliste
+
+1. **Léger** : Seulement Python + ansible-core (pas de collections inutiles)
+2. **Natif Windows** : Pas de WSL, pas de VM
+3. **Simple** : Configuration minimale, facile à comprendre
+4. **Portable** : Peut fonctionner sur clé USB
+5. **Rapide** : Moins de dépendances = installation plus rapide
+
+## 📦 Taille approximative
+
+- Python portable : ~25 MB
+- Ansible + dépendances : ~15 MB
+- **Total : ~40 MB** (vs plusieurs GB avec WSL)
+
+Cette solution est **parfaite pour un environnement isolé** avec installation minimaliste ! 🚀
