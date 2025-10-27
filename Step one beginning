@@ -1,0 +1,304 @@
+# Procédure pour Machine Windows Isolée (via machine intermédiaire avec Internet)
+
+## Architecture
+
+```
+[Machine avec Internet] → [Transfert] → [Windows Isolé] → [SSH] → [Serveurs RHEL Isolés]
+     (Préparation)                       (Jumphost)              (Cibles)
+```
+
+## Phase 1 : Préparation sur Machine avec Internet
+
+### 1.1 Télécharger Python
+```powershell
+# Télécharger Python 3.11.7 installer
+# URL: https://www.python.org/ftp/python/3.11.7/python-3.11.7-amd64.exe
+# Ou version portable : python-3.11.7-embed-amd64.zip
+```
+
+### 1.2 Télécharger Ansible et dépendances
+```powershell
+# Créer dossier de packages
+mkdir C:\ansible-offline-bundle
+
+# Télécharger packages Python
+pip download -d C:\ansible-offline-bundle ansible-core==2.15.8
+pip download -d C:\ansible-offline-bundle paramiko jinja2 PyYAML cryptography
+```
+
+### 1.3 Télécharger OpenSSH pour Windows
+```powershell
+# Télécharger depuis GitHub
+# URL: https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.5.0.0p1-Beta/OpenSSH-Win64.zip
+```
+
+### 1.4 Télécharger paquets pour RHEL (Erlang, RabbitMQ, dépendances)
+```powershell
+# Erlang 27.1.2
+Invoke-WebRequest -Uri "https://github.com/erlang/otp/releases/download/OTP-27.1.2/otp_src_27.1.2.tar.gz" -OutFile "erlang.tar.gz"
+
+# RabbitMQ 4.1.0
+Invoke-WebRequest -Uri "https://github.com/rabbitmq/rabbitmq-server/releases/download/v4.1.0/rabbitmq-server-generic-unix-4.1.0.tar.xz" -OutFile "rabbitmq.tar.xz"
+
+# Dépendances RHEL (via conteneur ou serveur RHEL temporaire avec Internet)
+# Voir script bash précédent pour yumdownloader
+```
+
+### 1.5 Créer le bundle complet
+```powershell
+# Structure du bundle
+C:\ansible-complete-bundle\
+├── python\
+│   └── python-3.11.7-amd64.exe
+├── openssh\
+│   └── OpenSSH-Win64.zip
+├── ansible\
+│   └── *.whl (tous les packages pip)
+├── packages\
+│   ├── erlang\
+│   │   ├── otp_src_27.1.2.tar.gz
+│   │   └── erlang-deps-rhel.tar.gz
+│   └── rabbitmq\
+│       └── rabbitmq-server-generic-unix-4.1.0.tar.xz
+└── projet\
+    ├── ansible.cfg
+    ├── inventory.ini
+    ├── group_vars\
+    ├── deploy_erlang.yml
+    ├── deploy_rabbitmq.yml
+    ├── validate.yml
+    └── deploy.ps1
+
+# Créer archive
+Compress-Archive -Path "C:\ansible-complete-bundle" -DestinationPath "C:\ansible-bundle.zip"
+```
+
+## Phase 2 : Transfert vers Windows Isolé
+
+### 2.1 Méthodes de transfert possibles
+- **USB/Disque externe** : Copier ansible-bundle.zip
+- **Réseau interne** : Si partage réseau disponible entre machine Internet et Windows isolé
+- **Autre support** : CD/DVD, disque réseau temporaire
+
+### 2.2 Vérifier l'intégrité
+```powershell
+# Sur machine avec Internet (avant transfert)
+Get-FileHash -Algorithm SHA256 C:\ansible-bundle.zip | Out-File bundle-checksum.txt
+
+# Sur Windows isolé (après transfert)
+Get-FileHash -Algorithm SHA256 C:\Temp\ansible-bundle.zip
+# Comparer avec bundle-checksum.txt
+```
+
+## Phase 3 : Installation sur Windows Isolé
+
+### 3.1 Extraire le bundle
+```powershell
+# Extraire
+Expand-Archive -Path "C:\Temp\ansible-bundle.zip" -DestinationPath "C:\Ansible"
+```
+
+### 3.2 Installer Python
+```powershell
+cd C:\Ansible\python
+.\python-3.11.7-amd64.exe /quiet InstallAllUsers=1 PrependPath=1
+
+# Vérifier
+python --version
+```
+
+### 3.3 Installer Ansible (offline)
+```powershell
+cd C:\Ansible\ansible
+pip install --no-index --find-links=. ansible-core
+
+# Vérifier
+ansible --version
+```
+
+### 3.4 Installer OpenSSH
+```powershell
+Expand-Archive -Path "C:\Ansible\openssh\OpenSSH-Win64.zip" -DestinationPath "C:\Program Files\OpenSSH"
+
+# Ajouter au PATH
+$env:Path += ";C:\Program Files\OpenSSH"
+[Environment]::SetEnvironmentVariable("Path", $env:Path, "Machine")
+
+# Vérifier
+ssh -V
+```
+
+### 3.5 Déployer le projet Ansible
+```powershell
+# Copier la structure du projet
+Copy-Item -Path "C:\Ansible\projet" -Destination "C:\ansible-rabbitmq" -Recurse
+```
+
+## Phase 4 : Configuration SSH
+
+### 4.1 Générer clés SSH sur Windows isolé
+```powershell
+New-Item -Path "$env:USERPROFILE\.ssh" -ItemType Directory -Force
+ssh-keygen -t rsa -b 4096 -f "$env:USERPROFILE\.ssh\ansible_rsa" -N '""'
+
+# Afficher la clé publique
+type "$env:USERPROFILE\.ssh\ansible_rsa.pub"
+# → Copier cette clé (manuellement ou via fichier texte)
+```
+
+### 4.2 Transférer la clé publique vers RHEL
+**Option A : Connexion directe (si possible)**
+```powershell
+# Première connexion avec mot de passe
+ssh ansible@192.168.1.10
+```
+
+**Option B : Via fichier intermédiaire**
+```powershell
+# Sauvegarder la clé publique dans un fichier
+type "$env:USERPROFILE\.ssh\ansible_rsa.pub" > C:\Temp\pubkey.txt
+# Copier pubkey.txt vers RHEL (USB, réseau interne, etc.)
+```
+
+### 4.3 Configurer sur chaque serveur RHEL
+```bash
+# Sur RHEL (en tant que root)
+useradd -m -s /bin/bash ansible
+passwd ansible
+
+# Installer la clé publique
+su - ansible
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+# Coller le contenu de la clé publique
+nano ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+exit
+
+# Configurer sudo
+echo "ansible ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ansible
+chmod 440 /etc/sudoers.d/ansible
+```
+
+### 4.4 Configurer SSH sur Windows
+```powershell
+notepad "$env:USERPROFILE\.ssh\config"
+```
+```
+Host rhel-dev-1
+    HostName 192.168.1.10
+    User ansible
+    IdentityFile ~/.ssh/ansible_rsa
+    StrictHostKeyChecking no
+```
+
+## Phase 5 : Déploiement
+
+### 5.1 Tester la connectivité
+```powershell
+cd C:\ansible-rabbitmq
+ansible rhel_servers -m ping
+```
+
+### 5.2 Déployer
+```powershell
+# Déployer tout
+.\deploy.ps1 -Action all
+
+# Ou étape par étape
+.\deploy.ps1 -Action erlang
+.\deploy.ps1 -Action rabbitmq
+.\deploy.ps1 -Action validate
+```
+
+## Phase 6 : Validation
+
+### 6.1 Vérifier l'installation
+```powershell
+ansible-playbook validate.yml
+```
+
+### 6.2 Accéder à RabbitMQ Management
+```
+http://192.168.1.10:15672
+Utilisateur: admin
+Mot de passe: AdminPass123
+```
+
+---
+
+## Résumé de la Procédure
+
+| Étape | Où | Action | Transfert nécessaire |
+|-------|-----|--------|---------------------|
+| 1 | Machine Internet | Télécharger tous les packages | Non |
+| 2 | Machine Internet | Créer bundle complet (ZIP) | Non |
+| 3 | Entre machines | Transférer bundle vers Windows isolé | **OUI (USB/Réseau)** |
+| 4 | Windows isolé | Installer Python, Ansible, OpenSSH | Non |
+| 5 | Windows isolé | Générer clés SSH | Non |
+| 6 | Entre Windows/RHEL | Copier clé publique vers RHEL | **OUI (SSH/USB)** |
+| 7 | Windows isolé | Configurer Ansible (inventory, config) | Non |
+| 8 | Windows isolé | Tester connectivité SSH | Non |
+| 9 | Windows isolé | Déployer avec Ansible | Non |
+| 10 | Windows isolé | Valider installation | Non |
+
+## Points de Transfert Critiques
+
+### Transfert 1 : Machine Internet → Windows Isolé
+**Contenu** : ansible-bundle.zip (~100-200 MB)
+**Méthodes** : USB, partage réseau temporaire, support physique
+
+### Transfert 2 : Windows Isolé → Serveurs RHEL
+**Contenu** : Clé SSH publique (~1 KB)
+**Méthodes** : SSH (si connexion réseau), USB + copie manuelle
+
+## Checklist Complète
+
+**Sur Machine avec Internet :**
+- [ ] Télécharger Python
+- [ ] Télécharger Ansible + dépendances
+- [ ] Télécharger OpenSSH
+- [ ] Télécharger Erlang 27.1.2
+- [ ] Télécharger RabbitMQ 4.1.0
+- [ ] Télécharger dépendances RHEL
+- [ ] Créer structure projet Ansible
+- [ ] Créer bundle ZIP
+- [ ] Calculer checksum
+
+**Transfert :**
+- [ ] Copier bundle sur support (USB)
+- [ ] Transférer vers Windows isolé
+- [ ] Vérifier checksum
+
+**Sur Windows Isolé :**
+- [ ] Extraire bundle
+- [ ] Installer Python
+- [ ] Installer Ansible (offline)
+- [ ] Installer OpenSSH
+- [ ] Générer clés SSH
+- [ ] Configurer SSH config
+- [ ] Copier clé publique vers RHEL
+
+**Sur Serveurs RHEL :**
+- [ ] Créer utilisateur ansible
+- [ ] Installer clé SSH publique
+- [ ] Configurer sudo
+
+**Déploiement :**
+- [ ] Tester ping Ansible
+- [ ] Déployer Erlang
+- [ ] Déployer RabbitMQ
+- [ ] Valider installation
+- [ ] Tester Management UI
+
+---
+
+## Estimation de Temps
+
+- **Préparation (Machine Internet)** : 1-2 heures
+- **Transfert** : 15-30 minutes (selon méthode)
+- **Installation Windows** : 30 minutes
+- **Configuration SSH** : 30 minutes
+- **Déploiement Ansible** : 1-2 heures (compilation Erlang)
+- **Total** : **3-5 heures**
+
+Cette procédure est **reproductible** et **automatisable** une fois le bundle créé ! 🚀
