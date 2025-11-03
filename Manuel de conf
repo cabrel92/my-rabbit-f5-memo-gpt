@@ -1,0 +1,852 @@
+# Manuel de Configuration F5 - Load Balancer RabbitMQ
+
+## Table des matières
+1. [Introduction](#introduction)
+2. [Prérequis](#prérequis)
+3. [Architecture](#architecture)
+4. [Configuration des Monitors](#configuration-des-monitors)
+5. [Configuration des Pools](#configuration-des-pools)
+6. [Configuration des Virtual Servers](#configuration-des-virtual-servers)
+7. [Configuration des Profiles](#configuration-des-profiles)
+8. [Validation et Tests](#validation-et-tests)
+
+---
+
+## 1. Introduction
+
+Ce manuel décrit la configuration complète d'un load balancer F5 BIG-IP pour RabbitMQ. La configuration couvre deux aspects principaux :
+- **Interface d'administration** (port 15672) pour la console de management
+- **File d'attente AMQP** (port 5672) pour le trafic applicatif
+
+### Architecture RabbitMQ
+
+RabbitMQ nécessite une approche spécifique pour le load balancing car :
+- Les connexions AMQP sont persistantes et longues
+- Le clustering RabbitMQ gère nativement la réplication
+- L'interface d'administration peut être load-balancée en mode round-robin
+- Les connexions clients AMQP nécessitent de la persistance
+
+---
+
+## 2. Prérequis
+
+### Informations nécessaires
+
+| Élément | Détails |
+|---------|---------|
+| **Serveurs RabbitMQ** | 3 nodes minimum (HA recommandée) |
+| **VIP Administration** | Ex: 10.10.10.100 |
+| **VIP AMQP** | Ex: 10.10.10.101 |
+| **Nodes RabbitMQ** | - rabbitmq-node1: 10.10.10.11<br>- rabbitmq-node2: 10.10.10.12<br>- rabbitmq-node3: 10.10.10.13 |
+
+### Accès requis
+- Accès administrateur au F5 BIG-IP
+- Connectivité réseau vers les nodes RabbitMQ
+- Certificats SSL (si HTTPS/AMQPS requis)
+
+---
+
+## 3. Architecture
+
+```
+                         ┌──────────────────┐
+                         │   Clients Web    │
+                         └────────┬─────────┘
+                                  │
+                         ┌────────▼─────────┐
+                         │  VIP Management  │
+                         │   10.10.10.100   │
+                         │   Port: 15672    │
+                         └────────┬─────────┘
+                                  │
+                    ┌─────────────┼─────────────┐
+                    │             │             │
+              ┌─────▼─────┐ ┌────▼──────┐ ┌────▼──────┐
+              │ RabbitMQ  │ │ RabbitMQ  │ │ RabbitMQ  │
+              │  Node 1   │ │  Node 2   │ │  Node 3   │
+              └───────────┘ └───────────┘ └───────────┘
+
+
+                    ┌──────────────────────┐
+                    │  Clients Applicatifs │
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────▼───────────┐
+                    │     VIP AMQP         │
+                    │    10.10.10.101      │
+                    │    Port: 5672        │
+                    └──────────┬───────────┘
+                               │
+                 ┌─────────────┼─────────────┐
+                 │             │             │
+           ┌─────▼─────┐ ┌────▼──────┐ ┌────▼──────┐
+           │ RabbitMQ  │ │ RabbitMQ  │ │ RabbitMQ  │
+           │  Node 1   │ │  Node 2   │ │  Node 3   │
+           └───────────┘ └───────────┘ └───────────┘
+```
+
+---
+
+## 4. Configuration des Monitors
+
+### 4.1 Monitor pour l'interface d'administration (HTTP)
+
+**Navigation:** Local Traffic > Monitors > Create
+
+**Paramètres:**
+
+```
+Name: mon_rabbitmq_mgmt
+Type: HTTP
+Interval: 5 seconds
+Timeout: 16 seconds
+Send String: GET /api/healthchecks/node HTTP/1.1\r\nHost: rabbitmq\r\nConnection: Close\r\n\r\n
+Receive String: "status":"ok"
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm monitor http mon_rabbitmq_mgmt \
+  interval 5 \
+  timeout 16 \
+  send "GET /api/healthchecks/node HTTP/1.1\r\nHost: rabbitmq\r\nConnection: Close\r\n\r\n" \
+  recv '"status":"ok"'
+```
+
+### 4.2 Monitor pour AMQP (TCP)
+
+**Navigation:** Local Traffic > Monitors > Create
+
+**Paramètres:**
+
+```
+Name: mon_rabbitmq_amqp
+Type: TCP
+Interval: 5 seconds
+Timeout: 16 seconds
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm monitor tcp mon_rabbitmq_amqp \
+  interval 5 \
+  timeout 16
+```
+
+### 4.3 Monitor avancé AMQP (optionnel)
+
+Pour un monitoring plus précis de la disponibilité AMQP :
+
+```bash
+tmsh create ltm monitor external mon_rabbitmq_amqp_advanced \
+  interval 10 \
+  timeout 31 \
+  run /Common/rabbitmq_amqp_check
+```
+
+**Script de monitoring avancé** (`/config/monitors/rabbitmq_amqp_check`):
+```bash
+#!/bin/bash
+# Script de monitoring AMQP pour F5
+# Testé avec RabbitMQ 3.x
+
+node_ip=${1}
+node_port=${2:-5672}
+
+# Test de connexion TCP basique
+timeout 3 bash -c "cat < /dev/null > /dev/tcp/${node_ip}/${node_port}" 2>/dev/null
+
+if [ $? -eq 0 ]; then
+    echo "UP"
+    exit 0
+else
+    echo "DOWN"
+    exit 1
+fi
+```
+
+---
+
+## 5. Configuration des Pools
+
+### 5.1 Pool pour l'interface d'administration
+
+**Navigation:** Local Traffic > Pools > Create
+
+**Paramètres:**
+
+```
+Name: pool_rabbitmq_mgmt
+Description: RabbitMQ Management Console Pool
+Health Monitors: mon_rabbitmq_mgmt
+Load Balancing Method: Round Robin
+Priority Group Activation: Disabled
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm pool pool_rabbitmq_mgmt \
+  monitor mon_rabbitmq_mgmt \
+  load-balancing-mode round-robin
+```
+
+### 5.2 Pool Members pour l'administration
+
+**Navigation:** Pool > Members > Add
+
+**Paramètres pour chaque node:**
+
+```
+Node 1:
+  Address: 10.10.10.11
+  Service Port: 15672
+  Priority Group: 0
+
+Node 2:
+  Address: 10.10.10.12
+  Service Port: 15672
+  Priority Group: 0
+
+Node 3:
+  Address: 10.10.10.13
+  Service Port: 15672
+  Priority Group: 0
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm node rabbitmq-node1 address 10.10.10.11
+tmsh create ltm node rabbitmq-node2 address 10.10.10.12
+tmsh create ltm node rabbitmq-node3 address 10.10.10.13
+
+tmsh modify ltm pool pool_rabbitmq_mgmt \
+  members add { \
+    rabbitmq-node1:15672 { } \
+    rabbitmq-node2:15672 { } \
+    rabbitmq-node3:15672 { } \
+  }
+```
+
+### 5.3 Pool pour AMQP
+
+**Navigation:** Local Traffic > Pools > Create
+
+**Paramètres:**
+
+```
+Name: pool_rabbitmq_amqp
+Description: RabbitMQ AMQP Queue Pool
+Health Monitors: mon_rabbitmq_amqp
+Load Balancing Method: Least Connections (member)
+Priority Group Activation: Disabled
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm pool pool_rabbitmq_amqp \
+  monitor mon_rabbitmq_amqp \
+  load-balancing-mode least-connections-member
+```
+
+### 5.4 Pool Members pour AMQP
+
+**Navigation:** Pool > Members > Add
+
+**Paramètres pour chaque node:**
+
+```
+Node 1:
+  Address: 10.10.10.11
+  Service Port: 5672
+  Connection Limit: 0 (illimité)
+  Priority Group: 0
+
+Node 2:
+  Address: 10.10.10.12
+  Service Port: 5672
+  Connection Limit: 0
+  Priority Group: 0
+
+Node 3:
+  Address: 10.10.10.13
+  Service Port: 5672
+  Connection Limit: 0
+  Priority Group: 0
+```
+
+**Commande CLI:**
+```bash
+tmsh modify ltm pool pool_rabbitmq_amqp \
+  members add { \
+    rabbitmq-node1:5672 { connection-limit 0 } \
+    rabbitmq-node2:5672 { connection-limit 0 } \
+    rabbitmq-node3:5672 { connection-limit 0 } \
+  }
+```
+
+---
+
+## 6. Configuration des Virtual Servers
+
+### 6.1 Virtual Server pour l'administration (HTTP)
+
+**Navigation:** Local Traffic > Virtual Servers > Create
+
+**Paramètres:**
+
+```
+Name: vs_rabbitmq_mgmt
+Description: RabbitMQ Management Console
+Type: Standard
+Source Address: 0.0.0.0/0
+Destination Address/Mask: 10.10.10.100
+Service Port: 15672
+Protocol: TCP
+Protocol Profile (Client): tcp
+Protocol Profile (Server): tcp
+HTTP Profile: http
+Default Pool: pool_rabbitmq_mgmt
+Source Address Translation: Auto Map
+Default Persistence Profile: None
+Fallback Persistence Profile: None
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm virtual vs_rabbitmq_mgmt \
+  destination 10.10.10.100:15672 \
+  mask 255.255.255.255 \
+  pool pool_rabbitmq_mgmt \
+  ip-protocol tcp \
+  profiles add { tcp http } \
+  source 0.0.0.0/0 \
+  source-address-translation { type automap }
+```
+
+### 6.2 Virtual Server pour l'administration HTTPS (optionnel)
+
+**Paramètres:**
+
+```
+Name: vs_rabbitmq_mgmt_https
+Destination Address/Mask: 10.10.10.100
+Service Port: 443
+Protocol: TCP
+SSL Profile (Client): clientssl
+SSL Profile (Server): serverssl-insecure-compatible (ou custom)
+HTTP Profile: http
+Default Pool: pool_rabbitmq_mgmt
+Source Address Translation: Auto Map
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm virtual vs_rabbitmq_mgmt_https \
+  destination 10.10.10.100:443 \
+  mask 255.255.255.255 \
+  pool pool_rabbitmq_mgmt \
+  ip-protocol tcp \
+  profiles add { tcp http clientssl serverssl-insecure-compatible } \
+  source 0.0.0.0/0 \
+  source-address-translation { type automap }
+```
+
+### 6.3 Virtual Server pour AMQP
+
+**Navigation:** Local Traffic > Virtual Servers > Create
+
+**Paramètres:**
+
+```
+Name: vs_rabbitmq_amqp
+Description: RabbitMQ AMQP Queue Service
+Type: Standard
+Source Address: 0.0.0.0/0
+Destination Address/Mask: 10.10.10.101
+Service Port: 5672
+Protocol: TCP
+Protocol Profile (Client): tcp-lan-optimized
+Protocol Profile (Server): tcp-lan-optimized
+Default Pool: pool_rabbitmq_amqp
+Source Address Translation: Auto Map
+Default Persistence Profile: source_addr
+Persistence Timeout: 3600 seconds
+Fallback Persistence Profile: None
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm virtual vs_rabbitmq_amqp \
+  destination 10.10.10.101:5672 \
+  mask 255.255.255.255 \
+  pool pool_rabbitmq_amqp \
+  ip-protocol tcp \
+  profiles add { tcp-lan-optimized } \
+  source 0.0.0.0/0 \
+  source-address-translation { type automap } \
+  persist add { source_addr { default yes } } \
+  persist-timeout 3600
+```
+
+### 6.4 Virtual Server pour AMQPS (optionnel)
+
+**Paramètres:**
+
+```
+Name: vs_rabbitmq_amqps
+Destination Address/Mask: 10.10.10.101
+Service Port: 5671
+Protocol: TCP
+SSL Profile (Client): clientssl
+SSL Profile (Server): serverssl-insecure-compatible
+Default Pool: pool_rabbitmq_amqp
+Source Address Translation: Auto Map
+Default Persistence Profile: ssl
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm virtual vs_rabbitmq_amqps \
+  destination 10.10.10.101:5671 \
+  mask 255.255.255.255 \
+  pool pool_rabbitmq_amqp \
+  ip-protocol tcp \
+  profiles add { tcp-lan-optimized clientssl serverssl-insecure-compatible } \
+  source 0.0.0.0/0 \
+  source-address-translation { type automap } \
+  persist add { ssl { default yes } }
+```
+
+---
+
+## 7. Configuration des Profiles
+
+### 7.1 Profile TCP optimisé pour AMQP
+
+**Navigation:** Local Traffic > Profiles > Protocol > TCP > Create
+
+**Paramètres:**
+
+```
+Name: tcp_rabbitmq_optimized
+Parent Profile: tcp-lan-optimized
+Idle Timeout: 3600 seconds
+Keep Alive Interval: 1800 seconds
+Zero Window Timeout: 20000 ms
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm profile tcp tcp_rabbitmq_optimized {
+  defaults-from tcp-lan-optimized
+  idle-timeout 3600
+  keep-alive-interval 1800
+  zero-window-timeout 20000
+}
+```
+
+**Appliquer au Virtual Server:**
+```bash
+tmsh modify ltm virtual vs_rabbitmq_amqp \
+  profiles replace-all-with { tcp_rabbitmq_optimized }
+```
+
+### 7.2 Profile de Persistance Source Address
+
+**Navigation:** Local Traffic > Profiles > Persistence > Source Address > Create
+
+**Paramètres:**
+
+```
+Name: persist_rabbitmq_source
+Parent Profile: source_addr
+Timeout: 3600 seconds
+Match Across Virtual Servers: Disabled
+Match Across Pools: Disabled
+Override Connection Limit: Disabled
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm persistence source-addr persist_rabbitmq_source {
+  defaults-from source_addr
+  timeout 3600
+  match-across-vs disabled
+  match-across-pools disabled
+}
+```
+
+### 7.3 Configuration iRule pour logging (optionnel)
+
+**Navigation:** Local Traffic > iRules > Create
+
+**iRule pour debugging:**
+
+```tcl
+when CLIENT_ACCEPTED {
+    log local0. "RabbitMQ Connection from [IP::client_addr]:[TCP::client_port] to [IP::local_addr]:[TCP::local_port]"
+}
+
+when SERVER_CONNECTED {
+    log local0. "RabbitMQ Connection established to [IP::server_addr]:[TCP::server_port] for client [IP::client_addr]"
+}
+
+when CLIENT_CLOSED {
+    log local0. "RabbitMQ Connection closed from [IP::client_addr]"
+}
+```
+
+**Commande CLI:**
+```bash
+tmsh create ltm rule irule_rabbitmq_logging {
+  when CLIENT_ACCEPTED {
+    log local0. "RabbitMQ Connection from [IP::client_addr]:[TCP::client_port] to [IP::local_addr]:[TCP::local_port]"
+  }
+  when SERVER_CONNECTED {
+    log local0. "RabbitMQ Connection established to [IP::server_addr]:[TCP::server_port] for client [IP::client_addr]"
+  }
+  when CLIENT_CLOSED {
+    log local0. "RabbitMQ Connection closed from [IP::client_addr]"
+  }
+}
+```
+
+**Appliquer l'iRule:**
+```bash
+tmsh modify ltm virtual vs_rabbitmq_amqp rules { irule_rabbitmq_logging }
+```
+
+---
+
+## 8. Validation et Tests
+
+### 8.1 Vérification de l'état des Pools
+
+**Via GUI:**
+1. Naviguer vers Local Traffic > Pools
+2. Vérifier que `pool_rabbitmq_mgmt` et `pool_rabbitmq_amqp` affichent un statut vert
+3. Vérifier que tous les membres sont "Available (Enabled)"
+
+**Via CLI:**
+```bash
+# Vérifier l'état des pools
+tmsh show ltm pool pool_rabbitmq_mgmt
+tmsh show ltm pool pool_rabbitmq_amqp
+
+# Vérifier l'état des membres
+tmsh show ltm pool pool_rabbitmq_mgmt members
+tmsh show ltm pool pool_rabbitmq_amqp members
+```
+
+### 8.2 Test de l'interface d'administration
+
+**Depuis un navigateur:**
+```
+http://10.10.10.100:15672
+ou
+https://10.10.10.100:443 (si HTTPS configuré)
+```
+
+**Avec curl:**
+```bash
+# Test HTTP
+curl -I http://10.10.10.100:15672
+
+# Test avec authentification
+curl -u guest:guest http://10.10.10.100:15672/api/overview
+```
+
+**Résultat attendu:**
+- Code HTTP 200 ou redirection 301/302
+- Accès à la console RabbitMQ Management
+
+### 8.3 Test des connexions AMQP
+
+**Test de connectivité TCP:**
+```bash
+# Test port 5672
+telnet 10.10.10.101 5672
+
+# Ou avec nc
+nc -zv 10.10.10.101 5672
+
+# Ou avec nmap
+nmap -p 5672 10.10.10.101
+```
+
+**Test avec client Python:**
+```python
+import pika
+
+# Connexion via le VIP
+credentials = pika.PlainCredentials('guest', 'guest')
+parameters = pika.ConnectionParameters(
+    host='10.10.10.101',
+    port=5672,
+    credentials=credentials,
+    heartbeat=600,
+    blocked_connection_timeout=300
+)
+
+try:
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+    print("Connection successful!")
+    
+    # Déclarer une queue de test
+    channel.queue_declare(queue='test_queue')
+    print("Queue declared successfully!")
+    
+    connection.close()
+except Exception as e:
+    print(f"Connection failed: {e}")
+```
+
+### 8.4 Monitoring des statistiques
+
+**Via CLI:**
+```bash
+# Statistiques du Virtual Server AMQP
+tmsh show ltm virtual vs_rabbitmq_amqp
+
+# Statistiques détaillées
+tmsh show ltm virtual vs_rabbitmq_amqp detail
+
+# Connexions actuelles
+tmsh show sys connection cs-server-addr 10.10.10.101
+```
+
+**Métriques importantes à surveiller:**
+- **Current Connections**: nombre de connexions actives
+- **Total Connections**: total des connexions depuis le démarrage
+- **Bits In/Out**: débit réseau
+- **Packets In/Out**: nombre de paquets
+- **Pool Member Status**: état de santé des membres
+
+### 8.5 Tests de basculement (Failover)
+
+**Scénario 1: Arrêt d'un node RabbitMQ**
+```bash
+# Désactiver un membre du pool
+tmsh modify ltm pool pool_rabbitmq_amqp members modify { rabbitmq-node1:5672 { state user-down } }
+
+# Vérifier que le trafic bascule sur les autres nodes
+tmsh show ltm pool pool_rabbitmq_amqp members
+
+# Réactiver le membre
+tmsh modify ltm pool pool_rabbitmq_amqp members modify { rabbitmq-node1:5672 { state user-up } }
+```
+
+**Scénario 2: Test de charge**
+```bash
+# Générer des connexions multiples
+for i in {1..100}; do
+  python test_rabbitmq_connection.py &
+done
+
+# Observer la répartition
+tmsh show ltm pool pool_rabbitmq_amqp members detail
+```
+
+### 8.6 Vérification des logs
+
+**Logs du système F5:**
+```bash
+tail -f /var/log/ltm
+```
+
+**Logs spécifiques RabbitMQ (si iRule activée):**
+```bash
+tail -f /var/log/ltm | grep RabbitMQ
+```
+
+---
+
+## 9. Troubleshooting
+
+### 9.1 Problèmes courants
+
+#### Pool Members en statut "Down"
+
+**Symptômes:**
+- Les membres du pool apparaissent en rouge
+- Erreur "Pool member is unavailable"
+
+**Solutions:**
+1. Vérifier la connectivité réseau:
+```bash
+ping 10.10.10.11
+ping 10.10.10.12
+ping 10.10.10.13
+```
+
+2. Vérifier les ports:
+```bash
+tmsh run /util curl http://10.10.10.11:15672/api/healthchecks/node
+```
+
+3. Vérifier les monitors:
+```bash
+tmsh show ltm monitor mon_rabbitmq_mgmt
+```
+
+4. Tester manuellement le monitor:
+```bash
+curl -H "Host: rabbitmq" http://10.10.10.11:15672/api/healthchecks/node
+```
+
+#### Connexions AMQP interrompues
+
+**Symptômes:**
+- Déconnexions fréquentes des clients
+- Erreurs "Connection reset by peer"
+
+**Solutions:**
+1. Augmenter les timeouts TCP:
+```bash
+tmsh modify ltm profile tcp tcp_rabbitmq_optimized \
+  idle-timeout 7200 \
+  keep-alive-interval 3600
+```
+
+2. Vérifier la persistance:
+```bash
+tmsh show ltm persistence persist-records
+```
+
+3. Ajuster le timeout de persistance:
+```bash
+tmsh modify ltm virtual vs_rabbitmq_amqp persist-timeout 7200
+```
+
+#### Performance dégradée
+
+**Symptômes:**
+- Latence élevée
+- Messages perdus
+
+**Solutions:**
+1. Vérifier la charge des pools:
+```bash
+tmsh show ltm pool pool_rabbitmq_amqp detail
+```
+
+2. Ajuster la méthode de load balancing:
+```bash
+# Passer à Least Connections si Round Robin est utilisé
+tmsh modify ltm pool pool_rabbitmq_amqp load-balancing-mode least-connections-member
+```
+
+3. Vérifier les connexions TCP:
+```bash
+tmsh show sys connection cs-server-addr 10.10.10.101
+```
+
+### 9.2 Commandes de diagnostic
+
+**Capture de paquets:**
+```bash
+# Capturer le trafic AMQP
+tcpdump -i 0.0:nnn -s0 -w /var/tmp/rabbitmq_amqp.pcap port 5672
+
+# Capturer le trafic management
+tcpdump -i 0.0:nnn -s0 -w /var/tmp/rabbitmq_mgmt.pcap port 15672
+```
+
+**Statistiques réseau:**
+```bash
+# Voir les connexions par pool member
+tmsh show ltm pool pool_rabbitmq_amqp members detail | grep -A 10 "10.10.10.11"
+```
+
+---
+
+## 10. Sauvegarde de la configuration
+
+### 10.1 Sauvegarde UCS
+
+**Via GUI:**
+1. System > Archives > Create
+2. Nom: `rabbitmq_lb_config_YYYYMMDD`
+3. Cocher "Encryption" (recommandé)
+
+**Via CLI:**
+```bash
+tmsh save sys ucs rabbitmq_lb_config_$(date +%Y%m%d).ucs
+```
+
+### 10.2 Export de la configuration spécifique
+
+**Export des objets RabbitMQ:**
+```bash
+# Monitors
+tmsh list ltm monitor mon_rabbitmq_mgmt > /tmp/rabbitmq_monitors.conf
+tmsh list ltm monitor mon_rabbitmq_amqp >> /tmp/rabbitmq_monitors.conf
+
+# Pools
+tmsh list ltm pool pool_rabbitmq_mgmt > /tmp/rabbitmq_pools.conf
+tmsh list ltm pool pool_rabbitmq_amqp >> /tmp/rabbitmq_pools.conf
+
+# Virtual Servers
+tmsh list ltm virtual vs_rabbitmq_mgmt > /tmp/rabbitmq_virtual_servers.conf
+tmsh list ltm virtual vs_rabbitmq_amqp >> /tmp/rabbitmq_virtual_servers.conf
+
+# Profiles
+tmsh list ltm profile tcp tcp_rabbitmq_optimized > /tmp/rabbitmq_profiles.conf
+tmsh list ltm persistence source-addr persist_rabbitmq_source >> /tmp/rabbitmq_profiles.conf
+```
+
+---
+
+## 11. Bonnes pratiques
+
+### 11.1 Sécurité
+
+1. **Restreindre l'accès à l'interface d'administration:**
+```bash
+tmsh modify ltm virtual vs_rabbitmq_mgmt source 192.168.100.0/24
+```
+
+2. **Utiliser HTTPS pour l'administration:**
+- Toujours déployer SSL/TLS pour le port 15672
+- Utiliser des certificats valides
+
+3. **Limiter les connexions:**
+```bash
+tmsh modify ltm virtual vs_rabbitmq_amqp connection-limit 10000
+```
+
+### 11.2 Performance
+
+1. **Optimiser les profils TCP:**
+- Utiliser `tcp-lan-optimized` pour les réseaux locaux
+- Ajuster les timeouts selon les besoins applicatifs
+
+2. **Méthode de load balancing:**
+- **Least Connections** recommandée pour AMQP (connexions longues)
+- **Round Robin** acceptable pour l'interface d'administration
+
+3. **Persistance:**
+- Utiliser la persistance source address pour AMQP
+- Timeout de persistance: 3600-7200 secondes
+
+### 11.3 Haute disponibilité
+
+1. **Cluster RabbitMQ:**
+- Minimum 3 nodes RabbitMQ en cluster
+- Configurer le quorum sur le cluster RabbitMQ lui-même
+
+2. **F5 HA:**
+- Déployer F5 en mode Active-Standby ou Active-Active
+- Synchroniser la configuration entre les devices
+
+3. **Monitoring:**
+- Configurer des alertes sur l'état des pools
+- Surveiller les métriques de connexions
+
+---
+
+## 12. Checklist de déploiement
+
+### Phase de préparation
+- [ ] Collecter les adr
